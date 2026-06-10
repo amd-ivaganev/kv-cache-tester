@@ -266,6 +266,7 @@ class TestConfig:
     chunk_size: int
     verbose: bool
     tokenizer_id: str
+    text_file: Optional[str] = None
     min_requests: int = 1
     max_new_tokens_per_period: int = 500000  # Cache pressure limit per period
     max_working_set_tokens: int = 0  # 0 = unlimited, else cap total working set
@@ -677,7 +678,7 @@ class SyntheticMessageGenerator:
     - Tool results: File contents, bash output, paths, errors
     """
 
-    def __init__(self, tokenizer_id: str, chunk_size: int = 64, prompt_generation_seed: Optional[int] = None):
+    def __init__(self, tokenizer_id: str, chunk_size: int = 64, prompt_generation_seed: Optional[int] = None, text_file: Optional[str] = None):
         self.tokenizer = None
         self.tokenizer_id = tokenizer_id
         self.chunk_size = chunk_size
@@ -688,6 +689,7 @@ class SyntheticMessageGenerator:
         if prompt_generation_seed is None:
             prompt_generation_seed = random.SystemRandom().randint(0, 2**32 - 1)
         self.prompt_generation_seed = prompt_generation_seed
+        self.text_file = text_file
 
         # Separate content pools for different message types
         self._user_text_pool_tokens: Optional[List[int]] = None
@@ -849,6 +851,19 @@ class SyntheticMessageGenerator:
             return
 
         self.load_tokenizer()
+
+        if self.text_file:
+            logger.info(f"Loading user text pool from {self.text_file}...")
+            with open(self.text_file, 'r') as f:
+                text = f.read()
+            tokens = self.tokenizer.encode(text, add_special_tokens=False)
+            if len(tokens) < self._pool_size:
+                repeats = (self._pool_size // len(tokens)) + 1
+                tokens = (tokens * repeats)[:self._pool_size]
+            self._user_text_pool_tokens = tokens
+            logger.info(f"User text pool ready: {len(self._user_text_pool_tokens):,} tokens (from file)")
+            return
+
         logger.info(f"Pre-generating user text pool ({self._pool_size:,} tokens)...")
 
         from vocabulary import TOPICS, CONNECTORS, ACTION_VERBS, ADJECTIVES, GENERIC_TEMPLATES
@@ -3455,6 +3470,9 @@ def parse_arguments():
                         help="Maximum input tokens per request (default: 128000)")
     parser.add_argument("--tokenizer", type=str, default="Qwen/Qwen2.5-Coder-32B-Instruct",
                         help="Tokenizer to use for synthetic data generation")
+    parser.add_argument("--text-file", type=str, default=None,
+                        help="Path to a text file to use as the user content pool "
+                             "(replaces synthetic vocabulary generation)")
     parser.add_argument("--chunk-size", type=int, default=64,
                         help="Cache block size in tokens (default: 64)")
 
@@ -3579,6 +3597,7 @@ async def main():
         chunk_size=args.chunk_size,
         verbose=args.verbose,
         tokenizer_id=args.tokenizer,
+        text_file=args.text_file,
         min_requests=args.min_requests,
         max_new_tokens_per_period=args.max_new_tokens_per_period,
         max_working_set_tokens=args.max_working_set_tokens,
@@ -3683,7 +3702,7 @@ async def main():
     logger.info(f"{Colors.HEADER}{'=' * 120}{Colors.ENDC}")
 
     # Initialize components
-    generator = SyntheticMessageGenerator(config.tokenizer_id, config.chunk_size, config.prompt_generation_seed)
+    generator = SyntheticMessageGenerator(config.tokenizer_id, config.chunk_size, config.prompt_generation_seed, config.text_file)
     api_client = APIClient(
         config.api_endpoint,
         temperature=config.temperature,
