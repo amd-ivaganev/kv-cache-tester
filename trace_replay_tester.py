@@ -1697,7 +1697,7 @@ class APIClient:
                     if chunk.choices:
                         delta = chunk.choices[0].delta
                         content_text = delta.content or ""
-                        reasoning_text = getattr(delta, 'reasoning_content', None) or ""
+                        reasoning_text = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None) or ""
                         chunk_text = content_text or reasoning_text
                         if not chunk_text:
                             continue
