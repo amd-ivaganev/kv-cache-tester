@@ -191,6 +191,7 @@ KV_CACHE_SIZES_FP8 = {
     'qwen3-coder-30b': 60_000,  # 60 KB per token
     'qwen2.5-coder-32b': 60_000,
     'qwen3-coder-480b': 124_000,  # 124 KB per token
+    'minimax-m3': 61_440,  # 60 KB per token (60 layers, 4 KV heads, 128 head_dim)
 }
 
 
