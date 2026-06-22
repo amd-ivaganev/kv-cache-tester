@@ -302,6 +302,7 @@ class TestConfig:
     advance_min: float = 0.0  # Minimum start position as fraction (0.0-1.0)
     advance_max: float = 0.0  # Maximum start position as fraction (0.0-1.0)
     advance_all_users: bool = False  # If True, advance all users; if False, only initial users
+    fixed_users: Optional[int] = None  # If set, maintain exactly this many users (no ramp-up)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -2952,20 +2953,23 @@ class TestOrchestrator:
                                    + (f" | {rl_count} users rate-limited" if rl_count > 0 else "")
                                    + (f" (ws: {self.period_rate_limit_ws}, ttft: {self.period_rate_limit_ttft})" if rl_count > 0 else ""))
 
-                    # Calculate how many users to add
-                    users_to_add = self.calculate_users_to_add()
-                    max_to_add = min(users_to_add, self.config.max_users - len(self.users))
-                    if max_to_add > 0:
-                        new_users_list = await self.create_users_batch(max_to_add, advance=self.config.advance_all_users)
-                        users_added = len(new_users_list)
-                    else:
+                    # Calculate how many users to add (skip when fixed_users is set)
+                    if self.config.fixed_users is not None:
                         users_added = 0
+                    else:
+                        users_to_add = self.calculate_users_to_add()
+                        max_to_add = min(users_to_add, self.config.max_users - len(self.users))
+                        if max_to_add > 0:
+                            new_users_list = await self.create_users_batch(max_to_add, advance=self.config.advance_all_users)
+                            users_added = len(new_users_list)
+                        else:
+                            users_added = 0
 
-                    if users_added > 0:
-                        new_users = len(self.users)
-                        old_users = new_users - users_added
-                        headroom = assessment.ttft_headroom_pct
-                        logger.info(f"{Colors.SUCCESS}  \u2192 Users {old_users} \u2192 {new_users} (+{users_added}) (headroom: {headroom:.0f}%){Colors.ENDC}")
+                        if users_added > 0:
+                            new_users = len(self.users)
+                            old_users = new_users - users_added
+                            headroom = assessment.ttft_headroom_pct
+                            logger.info(f"{Colors.SUCCESS}  \u2192 Users {old_users} \u2192 {new_users} (+{users_added}) (headroom: {headroom:.0f}%){Colors.ENDC}")
 
                     # Reset period counters
                     self.current_period_start = period_end_time
@@ -3432,10 +3436,12 @@ def parse_arguments():
                         help="Minimum output tokens/s per request (optional)")
 
     # User management
+    parser.add_argument("--fixed-users", type=int, default=None,
+                        help="Run exactly this many users at all times (no ramp-up, implies --recycle)")
     parser.add_argument("--start-users", type=int, default=1,
-                        help="Initial number of users (default: 1)")
+                        help="Initial number of users (default: 1, ignored if --fixed-users is set)")
     parser.add_argument("--max-users", type=int, default=50,
-                        help="Maximum concurrent users (default: 50)")
+                        help="Maximum concurrent users (default: 50, ignored if --fixed-users is set)")
     parser.add_argument("--recycle", action="store_true",
                         help="Replace completed users with new traces")
     parser.add_argument("--max-new-tokens-per-period", type=int, default=500000,
@@ -3585,15 +3591,15 @@ async def main():
         max_ttft=args.max_ttft,
         ttft_metric=args.ttft_metric,
         min_output_tokens_per_req=args.min_output_tokens_per_req,
-        start_users=args.start_users,
-        max_users=args.max_users,
+        start_users=args.fixed_users if args.fixed_users is not None else args.start_users,
+        max_users=args.fixed_users if args.fixed_users is not None else args.max_users,
         max_delay=args.max_delay,
         time_scale=args.time_scale,
         timing_strategy=args.timing_strategy,
         api_time_scale=args.api_time_scale,
         assessment_period=args.assessment_period,
         test_duration=args.test_duration,
-        recycle=args.recycle,
+        recycle=args.recycle or args.fixed_users is not None,
         chunk_size=args.chunk_size,
         verbose=args.verbose,
         tokenizer_id=args.tokenizer,
@@ -3622,6 +3628,7 @@ async def main():
         slo_decode_tps=args.slo_decode_tps,
         fairness_window=args.fairness_window,
         cache_max_age=args.cache_max_age,
+        fixed_users=args.fixed_users,
     )
 
     # Print header
@@ -3655,8 +3662,11 @@ async def main():
     if config.timing_strategy != "original":
         logger.info(f"  Timing Strategy: {config.timing_strategy}" +
                      (f" (api_time_scale={config.api_time_scale})" if config.timing_strategy == "api-scaled" else ""))
-    logger.info(f"  Start Users: {config.start_users}")
-    logger.info(f"  Max Users: {config.max_users}")
+    if config.fixed_users is not None:
+        logger.info(f"  Fixed Users: {config.fixed_users} (no ramp-up)")
+    else:
+        logger.info(f"  Start Users: {config.start_users}")
+        logger.info(f"  Max Users: {config.max_users}")
     logger.info(f"  Recycle: {config.recycle}")
     logger.info(f"  New Token Budget: {config.max_new_tokens_per_period:,} tokens/period")
     if config.max_working_set_tokens > 0:
